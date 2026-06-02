@@ -1,106 +1,114 @@
-# openarm_lift
+# lift
 
-ROS 2 串口桥接包：通过话题控制升降臂（设置目标高度、急停、周期上报当前高度）
+PC 端键盘串口控制台：通过 USB 串口与 **Raspberry Pi Pico** 上的升降固件通信（文本行协议，115200）。
 
 ## 环境要求
 
-- **ROS 2**（Humble / Jazzy / Iron 等；需已安装 `rclpy`、`std_msgs`，桌面安装一般已包含）
-- **Python 3** 与 **pyserial**：`pip install pyserial`（或 `sudo apt install python3-serial`）
-- 升降臂连接 **USB 转串口**，Linux 上常见设备名为 `/dev/ttyUSB0`（以实际为准）
-- 用户需在 **dialout** 组或有串口读写权限，否则无法打开设备：
+- **ROS 2**（Humble / Jazzy / Iron 等；本包为 `ament_python`，仅用于 `colcon build` 与 `ros2 run`）
+- **Python 3** 与 **pyserial**：`pip install pyserial` 或 `sudo apt install python3-serial`
+- Pico 已烧录并运行会读 USB 串口的 **`main.py`**（不能只占着 REPL）
+- Linux 串口权限（用户加入 `dialout` 组后重新登录）：
 
   ```bash
   sudo usermod -aG dialout $USER
-  # 重新登录后生效
   ```
 
 ## 安装
 
-1. 将整个 `openarm_lift` 文件夹放到自己的 Colcon 工作空间 **`src/`** 下，例如：
-
-   ```text
-   ~/ros2_ws/src/openarm_lift/
-   ```
-
-2. 在工作空间**根目录**编译并加载环境：
-
-   ```bash
-   cd ~/ros2_ws
-   source /opt/ros/<你的发行版>/setup.bash   # 例: humble
-   colcon build --packages-select openarm_lift
-   source install/setup.bash
-   ```
-
-   使用 **zsh** 时可将最后一行改为 `source install/setup.zsh`。
-
-
-
-## 运行节点
+在工作空间根目录编译：
 
 ```bash
-ros2 run openarm_lift lift_node
+cd ~/ros2_ws
+source /opt/ros/<你的发行版>/setup.bash   # 例: humble
+colcon build --packages-select lift
+source install/setup.bash
 ```
 
-指定串口与发布频率（单位 Hz）：
+zsh 用户可将最后一行改为 `source install/setup.zsh`。
+
+## 快速使用
+
+### 方式一：一键脚本（推荐）
+
+在包目录下直接运行，脚本会自动 source ROS 与工作空间 `install`：
 
 ```bash
-ros2 run openarm_lift lift_node --ros-args -p serial_port:=/dev/ttyUSB0 -p publish_rate:=1.0
+cd ~/ros2_ws/src/lift
+./scripts/keyboard_control        # zsh
+./scripts/keyboard_control.bash   # bash
 ```
 
-## 一键脚本（可选）
-
-在包目录下：
+指定串口：
 
 ```bash
-chmod +x scripts/run_lift_node.sh  
-./scripts/run_lift_node.sh
-# 或带参数：
-./scripts/run_lift_node.sh --ros-args -p serial_port:=/dev/ttyUSB1 -p publish_rate:=2.0
+LIFT_SERIAL_PORT=/dev/ttyACM1 ./scripts/keyboard_control.bash
+# 或
+./scripts/keyboard_control.bash -- --port /dev/ttyACM1
 ```
 
-脚本使用 **bash** 调用 `setup.bash`。若工作空间不在默认推断路径，先设置：
+### 方式二：`ros2 run`
+
+已 `source install/setup.bash` 后：
 
 ```bash
-export ROS2_WS=/你的/ros2_ws路径
+ros2 run lift keyboard_control
+ros2 run lift keyboard_control -- --port /dev/ttyACM0
 ```
 
-## 话题说明
-
-| 话题名 | 方向 | 消息类型 | 说明 |
-|--------|------|----------|------|
-| `/lift/cmd_height` | 订阅 | `std_msgs/msg/Int32` | 目标高度 **0～600** |
-| `/lift/cmd_stop` | 订阅 | `std_msgs/msg/Empty` | 任意发一条即可停止运动 |
-| `/lift/current_height` | 发布 | `std_msgs/msg/Int32` | 按 `publish_rate` 周期发布；**`-1` 表示本次读高度失败** |
-
-## 快速测试（另开终端，已 `source install/setup.bash`）
+### 方式三：不依赖 ROS（仅 Python）
 
 ```bash
-# 订阅当前高度
-ros2 topic echo /lift/current_height
-
-# 设置目标高度 300
-ros2 topic pub --once /lift/cmd_height std_msgs/msg/Int32 "{data: 300}"
-
-# 停止
-ros2 topic pub --once /lift/cmd_stop std_msgs/msg/Empty "{}"
+python3 ~/ros2_ws/src/lift/lift/control.py --port /dev/ttyACM0
 ```
 
-## 交互式命令行
+## 键盘操作
 
-键盘输入高度 / `s` 查询 / `p` 停止 / `q` 退出：
+连接成功后会显示当前串口与按键说明：
+
+| 按键 | 串口命令 | 说明 |
+|------|----------|------|
+| `w` | `up` | 上升 |
+| `s` | `down` | 下降 |
+| `l` | `stop` | 停止 |
+| `g` | `get` | 查询状态 |
+| `c` | `set_comp …` | 设置下行补偿系数（会提示输入数值） |
+| `0`–`600` + Enter | `goto <高度>` | 走到目标高度（mm），等待 `GOTO_DONE` |
+| 空格 | `stop` | 运动中取消当前 `goto` |
+| Ctrl+C | — | 退出 |
+
+终端会打印 `[TX]` / `[RX]` 便于对照固件回显。
+
+## 串口选择
+
+默认行为（未指定 `--port` 且未设置 `LIFT_SERIAL_PORT` 时）：
+
+1. 自动查找描述中含 **Pico / RP2040 / CircuitPython** 的设备
+2. Linux 上若未找到，使用 **`/dev/ttyACM0`**
+3. Windows 上会提示手动输入（如 `COM3`）
+
+环境变量与参数等价：
 
 ```bash
-ros2 run openarm_lift lift_control_cli
+export LIFT_SERIAL_PORT=/dev/ttyACM1
+ros2 run lift keyboard_control
 ```
-
-默认串口仍为 `/dev/ttyUSB0`；若需改口，请使用上面的 **`lift_node` + 参数**，或自行修改 `openarm_lift/lift_control.py` 中 `LiftArm` 的默认端口。
 
 ## 常见问题
 
-- **找不到包**：确认已在本工作空间执行 `colcon build` 且当前终端已 `source install/setup.bash`。
-- **`ModuleNotFoundError: serial`**：安装 `pyserial`。
-- **Permission denied 串口**：检查 `dialout` 组与设备路径；或临时 `sudo chmod 666 /dev/ttyUSB0`（不推荐长期使用）。
+| 现象 | 处理 |
+|------|------|
+| 打开串口后无反应 | 确认 Pico 上 **`main.py` 在跑**；波特率 **115200**；多板子时用 `-p` 指定正确设备 |
+| 一连接就反复复位 | 程序已尝试关闭 DTR/RTS；可换 USB 线/口，或拔插后再连 |
+| `Permission denied` on `/dev/ttyACM*` | 加入 `dialout` 组并重新登录，或临时 `sudo chmod a+rw /dev/ttyACM0` |
+| 未找到 `install/setup.bash` | 在工作空间根目录执行 `colcon build --packages-select lift` |
 
-## 许可
+## 包结构
 
-见 `package.xml` 中的 `license` 字段。
+```text
+lift/
+├── lift/control.py      # 键盘控制台主程序
+├── scripts/keyboard_control       # zsh 启动脚本（source + ros2 run）
+├── scripts/keyboard_control.bash  # bash 启动脚本（同上）
+├── setup.py
+└── package.xml
+```
